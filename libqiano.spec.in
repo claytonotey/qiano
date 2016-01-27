@@ -1,0 +1,62 @@
+%define name    libqiano
+%define version 0.0.0
+%define release 0
+%define prefix  /usr/local
+
+Summary:	VST piano
+Name:		%{name}
+Version:	%{version}
+Release:	%{release}
+Prefix:		%{prefix}
+Copyright:	GPL
+Group:		Sound
+Source0:	%{name}-%{version}.tar.bz2
+URL:		
+BuildRoot:	/var/tmp/%{name}-%{version}-buildroot
+
+%description
+VST midi-pitch filter
+
+%package devel
+Summary:	VST midi-pitch filter
+
+Group:		Development/Libraries
+Requires:	%{name} = %{version}
+
+%description devel
+
+
+%prep
+
+%setup
+if [ -f Makefile.cvs ]; then make -f Makefile.cvs; fi
+
+%build
+./configure --prefix=%{prefix}
+make
+make docs
+
+%install
+if [ -d $RPM_BUILD_ROOT ]; then rm -rf $RPM_BUILD_ROOT; fi
+mkdir -p $RPM_BUILD_ROOT
+make prefix=$RPM_BUILD_ROOT%{prefix} install
+
+%clean
+if [ -d $RPM_BUILD_ROOT ]; then rm -rf $RPM_BUILD_ROOT; fi
+
+%files
+%defattr(-,root,root)
+%doc AUTHORS COPYING ChangeLog NEWS README TODO
+%{prefix}/bin/*
+%{prefix}/lib/libqiano.so*
+%{prefix}/man/man1/*
+
+%files devel
+%defattr(-,root,root)
+%doc doc/html/*
+%{prefix}/lib/libqiano.a
+%{prefix}/lib/libqiano.la
+%{prefix}/lib/pkgconfig/qiano.pc
+%{prefix}/include/*
+
+%changelog

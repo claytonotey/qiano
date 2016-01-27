@@ -1,0 +1,10 @@
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+libdir=@libdir@
+includedir=@includedir@
+
+Name: paukn
+Description: VST midi-pitch filter
+Version: @VERSION@
+Libs: -L${libdir} -lpaukn
+Cflags: -I${includedir}
