@@ -317,6 +317,11 @@ void dwgs :: tran2long(dwgs *top, dwgs *bottom, bool bD)
   }
   wave1[del12] = top->a0_1;
 
+  for(int i=0; i<=del12; i++) {
+    printf("%g ",wave1[i]);
+  }
+  printf("\n");
+
   x = bottom->d1.x;
   cur = bottom->d1.cursor;
 
@@ -361,6 +366,11 @@ void dwgs :: tran2long(dwgs *top, dwgs *bottom, bool bD)
   }
   wave1[0] -= bottom->a1_4;
 
+
+  for(int i=0; i<=del12; i++) {
+    printf("%g ",wave1[i]);
+  }
+  printf("\n");
 
   for(int i=0; i<=del12; i++) {
     dwave[i] = wave1[i] - wave[i];

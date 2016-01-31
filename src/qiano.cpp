@@ -407,7 +407,7 @@ void PianoNote :: triggerOn(float velocity, float *tune)
 	outputdelay.clear();
 	bActive = true;
   t = 0;
-  decimation = 8;
+  decimation = 1;
 }
 
 void PianoNote :: triggerOff() 
