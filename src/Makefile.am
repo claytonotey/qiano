@@ -1,7 +1,7 @@
 AUTOMAKE_OPTIONS = subdir-objects
 
-CXX = clang++
-AM_CXXFLAGS = @QIANO_CFLAGS@ @VST_CFLAGS@ -I../include -flax-vector-conversions -march=native
+CXX = g++
+AM_CXXFLAGS = @QIANO_CFLAGS@ @VST_CFLAGS@ -I../include -flax-vector-conversions -march=native -framework Accelerate
 #-fpascal-strings
 libpauknincludedir = $(includedir)
 libpaukninclude_HEADERS = qiano.h

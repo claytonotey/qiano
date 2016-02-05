@@ -13,8 +13,13 @@
 
 #include <Accelerate/Accelerate.h>
 
+enum {
+  MaxFilterUpsample = 8
+};
+
 void sse_dotN(int N, float *A, float *B, float *C);
 float sse_dot(int N, float *A, float *B);
+float dsp_dot(int N, float *A, float *B);
 float dot(int N, float *A, float *B);
 
 class Filter {
@@ -25,7 +30,7 @@ class Filter {
   float groupdelay(float omega);
   void merge(const Filter &c1, const Filter &c2);
   inline float filter(float in);
-  void init();
+  void init(int upsample = 1);
 
   float *x;
   float *xc;
@@ -34,6 +39,9 @@ class Filter {
   float *bend;
   int n;
   int nmax;
+  int xstep;
+  int xskip;
+  int upsample;
 };
 
 
@@ -43,15 +51,15 @@ inline float Filter :: filter(float in)
   float *x = this->xc;
   float out = *(b) * in;  
   b+=2;
-  x+=2;
+  x+=xstep;
 
   while(b <= bend) {
-    if(x>xend) x = this->x;
-    out += *(b) * *(x);
-    out -= *(b+1) * *(x+1);
+    if(x>xend) x -= xskip;
+    out += *(b) * *(x) - *(b+1) * *(x+1);
     b+=2;
-    x+=2;
+    x+=xstep;
   }
+  
   x = this->xc;
   *(x) = in;
   *(x+1) = out;
@@ -102,50 +110,39 @@ public:
 class Thiran : public Filter {
  public:
  Thiran(int n) : Filter(n) {}
-  void create(float D, int N);
+  void create(float D, int N, int upsample = 1);
 };
 
 class ThiranDispersion : public Thiran {
  public:
  ThiranDispersion() : Thiran(2) {}
-  void create(float B, float f, int M);
+  void create(float B, float f, int M, int upsample = 1);
 };
 
-
-class Loss_ : public Filter {
+class Loss : public Filter
+{
  public:
- Loss_(int N) : Filter(N) {}
-  virtual void create(float f0, float fs, float c1, float c3)=0;
-};
-
-
-template<int upsample>
-class Loss : public Loss_ {
-  enum { aFB = 2*upsample+1,
-         xFB = 2*upsample-1
-  };
-
- public:
-  Loss() : Loss_(upsample) {}
+ Loss() : Filter(1) {}
   float filter(float in) {
-    float out = b[0] * in - b[aFB] * x[xFB];
-    for(int i=xFB; i>1; i-=2) {
-      x[i] = x[i-2];
-    }
+    float out = b[0] * in - b[3] * x[1];
     x[1] = out;
     return out;
   }
 
-   void create(float f0, float fs, float c1, float c3) {
-     n = 1;  
-     float g = 1.0 - c1/f0; 
-     float c = 4.0*c3+f0;
-     float a1 = (-c+sqrt(c*c-16.0*c3*c3))/(4.0*c3);
-     b[0] = g*(1+a1);
-     b[2] = 0;
-     b[1] = 1;    
-     b[aFB] = a1;     
-     init();
+  void create(float f0, float c1, float c3, int upsample = 1) {
+    f0 /= upsample;
+    c1 /= upsample;
+    c3 *= upsample;
+    float g = 1.0 - c1/f0; 
+    float c = 4.0*c3 + f0;
+    float a1 = (-c+sqrt(c*c-16.0*c3*c3))/(4.0*c3);
+    b[0] = g*(1+a1);
+    b[2] = 0;
+    b[1] = 1;    
+    b[3] = a1;     
+    
+    n = 1;
+    init(1);
    }
 };
 
@@ -182,8 +179,8 @@ class Delay
     memset(x,0,size*sizeof(float));
   }
 
-  float probe(int del) {
-    return x[(cursor + size - del)&mask];
+  float probe() {
+    return x[(d1 + size)&mask];
   }
 
   float goDelay(float in) {
@@ -210,6 +207,39 @@ class MSDFilter : public Filter {
 public:
   MSDFilter() : Filter(2) {}
   void create(float Fs, float m, float k, float mu, float RT);
+};
+
+class MSD2Filter {
+public:
+ MSD2Filter() : f11(4), f12(4), f21(4), f22(4) {}
+  void filter(float in[2], float out[2]);
+  void create(float Fs,
+              float m1, float k1, float R1, 
+              float m2, float k2, float R2,
+              float R12, float k12, float Z); 
+    
+  /*  Filter f11;
+  Filter f12;
+  Filter f21;
+  Filter f22;
+  */
+  float f11,f12,f21,f22;
+};
+
+enum {
+  DownSampleFilterSize = 64
+};
+
+class DownSampleFIR {
+ public:
+  int getDelay();
+  void create(int DownSample);
+  float filter(float in);
+  float b[DownSampleFilterSize];
+  float x[DownSampleFilterSize];
+  float *xc;
+  float *xend;
+  float *bend;
 };
 
 #endif

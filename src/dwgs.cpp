@@ -38,15 +38,13 @@ It might makes since to limit this to an integer delay
 
 */
 
-dwgs :: dwgs(float Fs, int type) :
-  fracdelay(8)
+//#define STRING_DEBUG 1
+
+dwgs :: dwgs(float Fs) :
+  fracDelayTop(8), fracDelayBottom(8), hammerDelay(8)
 
 {
 	this->Fs = Fs;
-  this->type = type;
-
-  decimation = 8;
-  upsample = 0;
   memset(modeTable,0,nMaxLongModes*sizeof(float*));
 
   a0_1 = 0.0f;
@@ -57,27 +55,11 @@ dwgs :: dwgs(float Fs, int type) :
   a1_2 = 0.0f;
   a1_3 = 0.0f;
   a1_4 = 0.0f;
-  
+  a0_5 = 0.0f;
 }
 
-void dwgs :: set(int upsample, float f, float c1, float c3, float B, float L, float longFreq1, float gammaL, float gammaL2, float inpos, float Z, int hammerNutDelay) 
+void dwgs :: set(int upsample, float f, float c1, float c3, float B, float L, float longFreq1, float gammaL, float gammaL2, float inpos, float Z) 
 {
-  if(this->upsample != upsample) {
-    switch(upsample) {
-    case 1:
-      loss = new Loss<1>();
-      break;
-    case 2:
-      loss = new Loss<2>();
-      break;
-    case 3:
-      loss = new Loss<3>();
-      break;
-    case 4:
-      loss = new Loss<4>();
-      break;
-    }
-  } 
   this->upsample = upsample;
 
   this->L = L;
@@ -91,158 +73,170 @@ void dwgs :: set(int upsample, float f, float c1, float c3, float B, float L, fl
 	}
 
   for(int m=0;m<M;m++) {		
-    dispersion[m].create(B,f,M);
+    dispersion[m].create(B,f,M,upsample);
   }
   this->B = B;
   this->longFreq1 = longFreq1;
 
-  float deltot = Fs/f;
-  if(hammerNutDelay > 0) {
-    del1 = hammerNutDelay;
-  } else {
-    del1 = (int)(0.5f*inpos*deltot);
-    if(del1 < 2) {
-      del1 = 1;
-    }
-  }
-  damper(c1,c3,gammaL,gammaL2);
-  
-  t = 0;
-}
 
-int dwgs :: getHammerNutDelay()
-{
-  return del1;
-}
-
-void dwgs :: damper(float c1, float c3, float gammaL, float gammaL2) 
-{
-
-	loss->create(f,Fs,c1,c3);  
-  float deltot = Fs/f; 
-  float omega = TWOPI * f / Fs;
-  float lowpassdelay = loss->phasedelay(omega);
+  float deltot = Fs/f*upsample; 
+  this->omega = TWOPI / deltot;
   float dispersiondelay = M*dispersion[0].phasedelay(omega);  
 
+  del0 = (int)(0.5 * (inpos*deltot));
+  del1 = (int)((inpos*deltot) - 6.0);
+  if(del1 < 1) abort();
+  float dHammer = inpos * deltot - del1 - 1;
+  hammerDelay.create(dHammer,(int)dHammer);
+  del5 = (int)dHammer;
+
   // XXX resize arrays
-  if(type == NoTopDispersion) {
-    del3 = (int)(0.5*(deltot-del1 - del1)-dispersiondelay-lowpassdelay-5.0);
-    del2 = (int)(0.5*(deltot-del1 - del1));
-    int del12 = del1 + del2;
-    posix_memalign((void**)&wave,32,(del12+1)*sizeof(float));
-    posix_memalign((void**)&wave1,32,(del12+1)*sizeof(float));
-    posix_memalign((void**)&dwave,32,(del12+1)*sizeof(float));
-    posix_memalign((void**)&Fl,32,(del12+1)*sizeof(float));
-    posix_memalign((void**)&dFl,32,(del12+1)*sizeof(float));
-    memset(wave,0,(del12+1)*sizeof(float));
-  } else if(type == NoBottomDispersion) {
-    del3 = (int)(0.5*(deltot-del1 - del1));
-    del2 = (int)(0.5*(deltot-del1 - del1)-dispersiondelay-lowpassdelay-5.0);
-    int del13 = del1 + del3;
-    posix_memalign((void**)&wave,32,(del13+1)*sizeof(float));
-    posix_memalign((void**)&wave1,32,(del13+1)*sizeof(float));
-    posix_memalign((void**)&dwave,32,(del13+1)*sizeof(float));
-    posix_memalign((void**)&Fl,32,(del13+1)*sizeof(float));
-    posix_memalign((void**)&dFl,32,(del13+1)*sizeof(float));
-    memset(wave,0,(del13+1)*sizeof(float));
-  } else {
-    del3 = (int)(0.5*(deltot-del1 - del1)-dispersiondelay);
-    del2 = (int)(0.5*(deltot-del1 - del1)-lowpassdelay-5.0);
-  }
+  del3 = (int)(0.5*(deltot - inpos * deltot) - dispersiondelay - 6.0);
+  del2 = (int)(0.5*(deltot - inpos * deltot) - 5.0);
 
-  if(del2 < 2)
-    del2 = 1;
-  if(del3 < 2)
-    del3 = 1;
+  if(del2 < 1) abort();
+  if(del3 < 1) abort();
 
-  float D = (deltot-(float)(del1 + del1+del2+del3)-dispersiondelay-lowpassdelay);
-  if(D<1) D=1;
-
-
-  fracdelay.create(D,(int)D);
-
-  /*
-  if(type == NoTopDispersion) {
-    fprintf(stderr,"dwgs top %d %d %d %d %g %g %g\n",del1,del2,del3,del1+del2, del1+del3+dispersiondelay+lowpassdelay+D,lowpassdelay,dispersiondelay);
-  } else if(type == NoBottomDispersion) {
-    fprintf(stderr,"dwgs bot %d %d %d %d %g %g %g\n",del1,del2,del3,del1+del3, del1+del2+dispersiondelay+lowpassdelay+D,lowpassdelay,dispersiondelay);
-  } else {
-    fprintf(stderr,"dwgs meh %d %d %d %g %g %g %g\n",del1,del2,del3,del1+del2+lowpassdelay+D, del1+del3+dispersiondelay,lowpassdelay,dispersiondelay);
-  }
-  */
-
-  d0.setDelay(del1-1);
+  float delHalf = 0.5f * deltot;
+ 
+  d0.setDelay(1);
   d1.setDelay(del1-1);
   d2.setDelay(del2-1);
   d3.setDelay(del3-1);
 
-  int delTab;
-  if(type == NoTopDispersion) {
-    delTab = del1 + del2;
-  } else if(type == NoBottomDispersion) {
-    delTab = del1 + del3;
-  } else {
-    delTab = 0;
-  }
+  float delHammerHalf = 0.5 * inpos * deltot;
 
-  float delHalf = 0.5f * deltot;
-  float delta = delTab - delHalf;
-  iMax = delTab + 1;
+  float dTop = delHalf - delHammerHalf - del2;
 
+  
+  del4 = (int)dTop;
+  
+  fracDelayTop.create(dTop,(int)dTop);
+
+  dBottomAndLoss = delHalf - delHammerHalf - del3 - dispersiondelay;
+
+  delTab = del0 + del2 + del4;
+  float delta = dTop - (int)dTop;
+  float delta2 = delHalf - delTab - delta;
+  
+  posix_memalign((void**)&wave,32,delTab*sizeof(float));
+  posix_memalign((void**)&wave0,32,delTab*sizeof(float));
+  posix_memalign((void**)&wave1,32,delTab*sizeof(float));
+  posix_memalign((void**)&wave2,32,delTab*sizeof(float));
+  posix_memalign((void**)&dwave,32,delTab*sizeof(float));
+  posix_memalign((void**)&Fl,32,delTab*sizeof(float));
+  posix_memalign((void**)&dFl,32,delTab*sizeof(float));
+  memset(wave,0,delTab*sizeof(float));
+  memset(wave0,0,delTab*sizeof(float));
+  memset(wave1,0,delTab*sizeof(float));
+  memset(wave2,0,delTab*sizeof(float));
+  
+  //fprintf(stderr,"dwgs top %d %d %d %d %g %g %g %g %g %g %g %g\n",del0,del1,del2,del3,dHammer+1+del2+dTop,del1+del3+dispersiondelay+lowpassdelay+dBottom, dTop, dBottom, dHammer, inpos*deltot, lowpassdelay, dispersiondelay);
+  
   nLongModes = (int)(0.5f * Fs / longFreq1 - 0.5);
+  //fprintf(stderr,"long modes %d \n",nLongModes);
   if(nLongModes >= nMaxLongModes) abort();
-
+  
   for(int k=1; k <= nLongModes; k++) {
-    float omegak = TWOPI * k * longFreq1 / Fs;
+    float omegak = TWOPI * k * longFreq1 / Fs / upsample;
     float gammak = gammaL * (1.0 + gammaL2 * k * k);
     fLong[k] = omegak / TWOPI;
     longModeResonator[k].create(omegak, gammak);
-
+    
     //fprintf(stderr,"fL%d=%g L%d/fT = %g\n",k,k*longFreq1,k,k*longFreq1/f );
     if(delTab) {
       float n = PI * k / delHalf;
       if(modeTable[k]) delete modeTable[k];
-      posix_memalign((void**)&modeTable[k],32,(delTab+1)*sizeof(float));
-      for(int i=0; i<iMax; i++) {
-        float d = i - delta;
-        if(d < 0 ) d = 0;
+      posix_memalign((void**)&modeTable[k],32,delTab*sizeof(float));
+      for(int i=0; i<delTab; i++) {
+        float d = i + delta;
         modeTable[k][i] = sin(d*n);
       }
+      modeTable[k][0] *= (0.5 + delta);
+      modeTable[k][delTab-1] *= (0.5 + delta2);
     }
   }
 
 
-  //fprintf(stderr,"%d %d\n",nTranModes,nLongModes);
+  damper(c1,c3,gammaL,gammaL2);
+}
+
+void dwgs :: damper(float c1, float c3, float gammaL, float gammaL2) 
+{
+	loss.create(f,c1,c3,upsample);
+  float lowpassdelay = loss.phasedelay(omega);
+  float dBottom = dBottomAndLoss - lowpassdelay;
+  fracDelayBottom.create(dBottom,5);
 }
 
 dwgs :: ~dwgs()
 {
 }
 
+int dwgs :: getMaxDecimation(float f, int upsample, float magic) 
+{
+  //float magic = 120;
+  int decimation = 1;
+  do {
+    float deltot = Fs*upsample / f;
+    //printf("%g %g\n",deltot, decimation * magic);
+    if(deltot > decimation * magic) {
+      decimation *= 2;
+    } else {
+      break;
+    }
+  } while(true);
+
+  return decimation;
+}
+
+int dwgs :: getMinUpsample(float f, float inpos)
+{
+  int upsample = 1; 
+  
+  do {
+    float deltot = upsample * Fs/f; 
+    del1 = (int)((inpos*deltot) - 6.0);
+    if(del1 < 4) {
+      upsample *= 2;
+    } else {
+      break;
+    }
+  } while(true);
+  
+  return upsample;
+}
+
 float dwgs :: input_velocity() {
   return a0_3 + a1_2;
 }
 
-
-//0 2
-//1 3
+float dwgs :: next_input_velocity() {
+  return d2.probe() + d1.probe();
+}
 
 // returns input to soundboard
 float dwgs :: go_string()
 {
-  a0_1 = d0.goDelay(a0_2);
-  a1_2 = d1.goDelay(a1_1);
+  float a;
+  a = d0.goDelay(a0_2);
+  a = hammerDelay.filter(a);
+  a1_2 = d1.goDelay(-a);
   a0_3 = d2.goDelay(a0_4);
-  a1_4 = d3.goDelay(a1_3);
+  a = d3.goDelay(a1_3);
+  for(int m=0;m<M;m++) {
+    a = dispersion[m].filter(a);
+  }
+  a = loss.filter(a);
+  a1_4 = fracDelayBottom.filter(a);
+  
   return a1_4;
 }
 
 float dwgs :: longTran(dwgs *top, dwgs *bottom) {
-  return square(top->a0_4 - bottom->a1_4);
+  return square(a0_5 - a1_4);
 }
 
-// d/dx (dy/dx)^2
-// dy/dx = dy/dt / dx/dt = v / vTran
 
 inline float hermite(float beta0, float beta3, float m0, float m1, float t) {
   if(t == 0.0) {
@@ -267,64 +261,77 @@ inline float hermite(float beta0, float beta3, float m0, float m1, float t) {
   return beta0;
 }
 
-void dwgs :: tran2long(dwgs *top, dwgs *bottom, bool bD)
+//0 2
+//1 3
+/* wave is the difference of top and bottom strings 
+   wave[0] is on the right side, so samples are delayed by frac(topDelay)
+*/
+// d/dx (dy/dx)^2
+// dy/dx = dy/dt / dx/dt = v / vTran
+
+void dwgs :: tran2long(dwgs *top, dwgs *bottom, int offset, int delay)
 {
   int del2 = top->del2;
-  int del3 = bottom->del3;
-  int del12 = top->del1 + top->del2;
-  int del13 = bottom->del1 + bottom->del3;
-  
-  wave1[0] = top->a0_4;
+  int del0 = top->del0;
+    
   float *x = top->d2.x;
-  int cur = top->d2.cursor;
+  int cur = (top->d2.cursor + DelaySize - delay + del4) % DelaySize;
 
-  if(del2 <= cur) {
+  int n = del2 + top->del4;
+  if(n <= cur) {
     float *x1 = x + cur;
-    for(int i=1; i<del2; i++) {
+    for(int i=0; i<n; i++) {
       wave1[i] = x1[-i];
     }
   } else {
     float *x1 = x + cur;
-    for(int i=1; i<=cur; i++) {
+    for(int i=0; i<=cur; i++) {
       wave1[i] = x1[-i];
     }
     int cur2 = cur + DelaySize;
     x1 = x + cur2;
-    for(int i=cur+1; i<del2; i++) {
+    for(int i=cur+1; i<n; i++) {
       wave1[i] = x1[-i];
     }
   }
-  wave1[del2] = top->a0_2;
 
   x = top->d0.x;
-  cur = top->d0.cursor;
-  float *wave10 = wave1 + del2;
-  if(del1 <= cur) {
+  cur = (top->d0.cursor + DelaySize - delay) % DelaySize;
+  float *wave10 = wave1 + del2 + del4;
+
+  if(del0 <= cur) {
     float *x1 = x + cur;
-    for(int i=1; i<del1; i++) {
+    for(int i=0; i<del0; i++) {
       wave10[i] = x1[-i];
     }
   } else {
     float *x1 = x + cur;
-    for(int i=1; i<=cur; i++) {
+    for(int i=0; i<=cur; i++) {
       wave10[i] = x1[-i];
     }
     int cur2 = cur + DelaySize;
     x1 = x + cur2;
-    for(int i=cur+1; i<del1; i++) {
+    for(int i=cur+1; i<del0; i++) {
       wave10[i] = x1[-i];
     }
   }
-  wave1[del12] = top->a0_1;
 
+#ifdef STRING_DEBUG
+  for(int i=0; i<delTab; i++) {
+    printf("%g ",wave1[i]);
+  }
+  printf("\n");
+#endif
+
+
+  /********* bottom *********/
+  
   x = bottom->d1.x;
-  cur = bottom->d1.cursor;
-
-  wave1[del13] -= bottom->a1_1;
-  wave10 = wave1 + del13;
-  if(del1 <= cur) {
+  cur = (bottom->d1.cursor + DelaySize - delay + del5 + 1 - del0) % DelaySize;
+  wave10 = wave1 + delTab;
+  if(del0 < cur) {
     float *x1 = x + cur;
-    for(int i=-1; i>-del1; i--) {
+    for(int i=-1; i>=-del0; i--) {
       wave10[i] -= x1[i];
     }
   } else {
@@ -334,18 +341,18 @@ void dwgs :: tran2long(dwgs *top, dwgs *bottom, bool bD)
     }
     int cur2 = cur + DelaySize;
     x1 = x + cur2;
-    for(int i=-cur-1; i>-del1; i--) {
+    for(int i=-cur-1; i>=-del0; i--) {
       wave10[i] -= x1[i];
     }
   }
-  wave1[del3] -= bottom->a1_2;
 
   x = bottom->d3.x;
-  cur = bottom->d3.cursor;
-  wave10 = wave1 + del3;
-  if(del3 <= cur) {
+  cur = (bottom->d3.cursor + DelaySize - delay) % DelaySize;
+  n = del2 + top->del4;
+  wave10 = wave1 + n;
+  if(n < cur) {
     float *x1 = x + cur;
-    for(int i=-1; i>-del3; i--) {
+    for(int i=-1; i>=-n; i--) {
       wave10[i] -= x1[i];
     }
   } else {
@@ -355,44 +362,53 @@ void dwgs :: tran2long(dwgs *top, dwgs *bottom, bool bD)
     }
     int cur2 = cur + DelaySize;
     x1 = x + cur2;
-    for(int i=-cur-1; i>-del3; i--) {
+    for(int i=-cur-1; i>=-n; i--) {
       wave10[i] -= x1[i];
     }
   }
-  wave1[0] -= bottom->a1_4;
 
+#ifdef STRING_DEBUG
+  for(int i=0; i<delTab; i++) {
+    printf("%g ",wave1[i]);
+  }
+  printf("\n");
+#endif
 
-  for(int i=0; i<=del12; i++) {
-    dwave[i] = wave1[i] - wave[i];
+  for(int i=0; i<delTab; i++) {
+    wave0[i] = wave2[i];
+    wave2[i] = wave[i];
+    dwave[i] = 0.5 * (wave1[i] - wave0[i]);
     wave[i] = wave1[i];
   }
 
+  int last = delTab - 1;
+  if(offset == 0) {
+    Fl[0] = 2.0 * (wave[1] - wave[0]) * wave[0];
+    for(int i=1; i<last; i++) {
+      Fl[i] = (wave[i+1] - wave[i-1]) * wave[i];
+    }
+    Fl[last] = 2.0 * (wave[last] - wave[last-1]) * wave[last];
 
-  Fl[0] = 2.0 * (wave[1] - wave[0]) * wave[0];
-  for(int i=1; i<del12; i++) {
-    Fl[i] = (wave[i+1] - wave[i-1]) * wave[i];
-  }
-  Fl[del12] = 2.0 * (wave[del12] - wave[del12-1]) * wave[del12];
-  
-  dFl[0] = 2.0 * ((dwave[1] - dwave[0]) * wave[0] + (wave[1] - wave[0]) * dwave[0]);
-  for(int i=1; i<del12; i++) {
-    dFl[i] = (dwave[i+1] - dwave[i-1]) * wave[i] + (wave[i+1] - wave[i-1]) * dwave[i];
-  }
-  dFl[del12] = 2.0 * ((dwave[del12] - dwave[del12-1]) * wave[del12] + (wave[del12] - wave[del12-1]) * dwave[del12]);
-
-
-  for(int k=1; k<=nLongModes; k++) {
-    float *tab = modeTable[k];
-    if(bD) {
-
-    } else {
-      hermite_m0[k] = hermite_m1[k];
-      hermite_m1[k] = sse_dot(iMax,tab,dFl);
+    for(int k=1; k<=nLongModes; k++) {
+      float *tab = modeTable[k];
       hermite_p0[k] = hermite_p1[k];
-      hermite_p1[k] = sse_dot(iMax,tab,Fl);
+      //hermite_p1[k] = sse_dot(delTab,tab,Fl);
+      hermite_p1[k] = dsp_dot(delTab,tab,Fl);
+    }
+  } else if(offset == 1) {
+    dFl[0] = 2.0 * ((dwave[1] - dwave[0]) * wave[0] + (wave[1] - wave[0]) * dwave[0]);
+    for(int i=1; i<last; i++) {
+      dFl[i] = (dwave[i+1] - dwave[i-1]) * wave[i] + (wave[i+1] - wave[i-1]) * dwave[i];
+    }
+    dFl[last] = 2.0 * ((dwave[last] - dwave[last-1]) * wave[last] + (wave[last] - wave[last-1]) * dwave[last]);
+     
+    for(int k=1; k<=nLongModes; k++) {
+      float *tab = modeTable[k];
+      hermite_m0[k] = hermite_m1[k];
+      //hermite_m1[k] = sse_dot(delTab,tab,dFl);      
+      hermite_m1[k] = dsp_dot(delTab,tab,dFl);      
     }
   }
-
 }
 
 void dwgs :: longForce(float *Ft, int n, int decimation) {
@@ -402,68 +418,36 @@ void dwgs :: longForce(float *Ft, int n, int decimation) {
   for(int i=0; i<n; i++) {
     float FbL = 0;
     for(int k=1; k<=nLongModes; k++) {
-      float F = hermite(hermite_p0[k], hermite_p1[k], hermite_m0[k], hermite_m1[k] , t);
-      FbL += longModeResonator[k].go(F);  
+      float F = hermite(hermite_p0[k], hermite_p1[k], decimation*hermite_m0[k], decimation*hermite_m1[k] , t);
+      float Fl = longModeResonator[k].go(F);
+      FbL += Fl;
+      //printf("%g %g %g %g %g %g ", F, Fl, hermite_p0[k], hermite_p1[k] , hermite_m0[k], hermite_m1[k]);
+
     }
+    //printf("\n");
     Ft[i] = FbL;
     t += dt;
   }
+  for(int k=1; k<=nLongModes; k++) {
+    //printf("%g %g %g %g ", hermite_p0[k], hermite_p1[k] , hermite_m0[k], hermite_m1[k]);
+  }
+  //printf("\n");
 }
 
 float dwgs :: go_soundboard(float load_h, float load_sb) 
 {
-  float a;
-
-  a1_1 = -a0_1;
   a0_2 = a0_3 + load_h;
-
-  // bottom -> right
-  a = a1_2 + load_h;
-  if(type == BothDispersion) {
-    for(int m=0;m<M;m++) {
-      a = dispersion[m].filter(a);
-    }
-  } else if(type == NoTopDispersion) {
-    for(int m=0;m<M;m++) {
-      a = dispersion[m].filter(a);
-    }
-    a = loss->filter(a);
-    a = fracdelay.filter(a);
-  }
-  a1_3 = a;
-
-  a = load_sb - a1_4;
-  if(type == BothDispersion) {
-    a = loss->filter(a);
-    a = fracdelay.filter(a);
-  } else if(type == NoBottomDispersion) {
-    for(int m=0;m<M;m++) {
-      a = dispersion[m].filter(a);
-    } 
-    a = loss->filter(a);
-    a = fracdelay.filter(a);
-  }
-  a0_4 = a;
+  a1_3 = a1_2 + load_h;
+  a0_5 = load_sb - a1_4;
+  a0_4 = fracDelayTop.filter(a0_5);
   
   return load_sb - 2 * a1_4;
-  
-
 }
 
 
 /*
-both
-| a0_1 --- del0 --- a0_2 | a0_3 --- del2 --- a0_4 ...   merged ...   |   
-|                        H                                           | 
-| a1_1 --- del1 --- a1_2 | ... dispersion ... a1_3 --- del3 --- a1_4 |
 
-notop
-| a0_1 --- del0 --- a0_2 | a0_3 --- del2 --- a0_4                             |   
-|                        H                                                    | 
-| a1_1 --- del1 --- a1_2 | ... dispersion + merged ... a1_3 --- del3 --- a1_4 |
-
-nobottom
-| a0_1 --- del0 --- a0_2 | a0_3 --- del2 --- a0_4 ... dispersion + merged ...   |   
-|                        H                                                      | 
-| a1_1 --- del1 --- a1_2 |  a1_3 --- del3 --- a1_4                              |
+| a0_1 --- del0 ---                 a0_2 | a0_3 --- del2 --- a0_4 --- fracDelayTop                            |   
+|                                        H                                                                    | 
+| a1_1 --- hammerDelay --- del1 --- a1_2 | a1_3  ... del3 ... dispersion + loss + fracDelayBottom --- a1_4 |
  */

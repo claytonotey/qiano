@@ -13,25 +13,26 @@ int Reverb :: getLength(int k)
 
 Reverb :: Reverb(float Fs) 
 {
+  conv = new ConvolveReverb<revSize>(1);
   this->Fs = Fs;
-  for(int k=0;k<8;k++) {
+  for(int k=0;k<ReverbTaps;k++) {
     o[k] = 0;
     b[k] = 1;
-    c[k] = k<8?((k%2==0)?1.0/8.0:-1.0/8.0):0.0;
+    c[k] = k<ReverbTaps?((k%2==0)?1.0/ReverbTaps:-1.0/ReverbTaps):0.0;
   }
   out = 0.0;
 }
 
 void Reverb :: set(float size, float c1, float c3)
 {
-  float s = (7 + size * (NumLengths - 8)) / 7.0;
-  for(int k=0;k<8;k++) {
+  float s = (ReverbTaps - 1 + size * (NumLengths - ReverbTaps)) / (float)(ReverbTaps - 1);
+  for(int k=0;k<ReverbTaps;k++) {
     lengths[k] = allLengths[lrintf(s * k)];
     lengths[k] = allLengths[k];
   }
-  for(int k=0;k<8;k++) {
+  for(int k=0;k<ReverbTaps;k++) {
     d[k].setDelay(getLength(k));
-    decay[k].create(Fs/getLength(k),Fs,c1,c3);
+    decay[k].create(Fs/getLength(k),c1,c3);
   }
 }
 
@@ -42,23 +43,22 @@ float Reverb :: probe()
 
 float Reverb :: reverb(float in) 
 {
-  float i[8];
+  float i[ReverbTaps];
   float fb = 0.0;
-  for(int j=0;j<8;j++) {
+  for(int j=0;j<ReverbTaps;j++) {
     fb += o[j];
   }
-  fb *= -0.25;
-  for(int j=0;j<8;j++) {
-    i[j] = b[j] * in + o[(j+1)%8] + fb;
+  fb *= -2.0 / ReverbTaps;
+  for(int j=0;j<ReverbTaps;j++) {
+    i[j] = b[j] * in + o[(j+1)%ReverbTaps] + fb;
     //fprintf(stderr,"%g ",i[j]);
   }
   //fprintf(stderr,"%g\n");
   
 
   out = 0.0;
-  for(int j=0;j<8;j++) {
+  for(int j=0;j<ReverbTaps;j++) {
     o[j] = decay[j].filter(d[j].goDelay(i[j]));
-    //o[j] = d[j].goDelay(i[j]);
     out += c[j] * o[j]*.5;
   }
   return out;

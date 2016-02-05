@@ -7,42 +7,38 @@ class dwgs;
 
 enum {
   DelaySize = 4096,
-  nMaxLongModes = 32
-};
-
-
-enum {
-  NoBottomDispersion = 0,
-  NoTopDispersion,
-  BothDispersion
+  nMaxLongModes = 128
 };
 
 class dwgs {
  public:
-  dwgs(float Fs, int type);
+  dwgs(float Fs);
   ~dwgs();
-
-  int getHammerNutDelay();
-  void set(int upsample, float f, float c1, float c3, float B, float L, float longFreq1, float gammaL, float gammaL2, float inpos, float Z, int hammerNutDelay);
+  
+  int getMaxDecimation(float f, int decimation, float magic);
+  int getMinUpsample(float f, float inpos);
+  void set(int upsample, float f, float c1, float c3, float B, float L, float longFreq1, float gammaL, float gammaL2, float inpos, float Z);
   float input_velocity();
+  float next_input_velocity();
   float go_string();
   float go_soundboard(float hload, float sbload);
   void damper(float c1, float c3, float gammaL, float gammaL2);
 
   float longTran(dwgs *top, dwgs *bottom);
-  void tran2long(dwgs *top, dwgs *bottom, bool bD);
+  void tran2long(dwgs *top, dwgs *bottom, int offset, int delay);
   void longForce(float *F, int n, int decimation);
 
-  int iMax;
-
+  int delTab;
   float *wave;
+  float *wave0;
+  float *wave2;
   float *wave1;
   float *dwave;
   float *Fl;
   float *dFl;
 
   float L;
-  int type;
+  float omega;
   float f,Fs;
   float inpos;
   float B;
@@ -50,8 +46,10 @@ class dwgs {
   int nLongModes;
   int upsample;
 
-  Loss_ *loss;
-  Thiran fracdelay;
+  Loss loss;
+  Thiran fracDelayTop;
+  Thiran fracDelayBottom;
+  Thiran hammerDelay;
   ThiranDispersion dispersion[4];
 
   float hermite_p0[nMaxLongModes];
@@ -61,12 +59,11 @@ class dwgs {
   float *modeTable[nMaxLongModes];
   float fLong[nMaxLongModes];
   DWGResonator longModeResonator[nMaxLongModes];
-  int decimation;
-  int t;
 
-  float a0_1, a0_2, a0_3, a0_4;
+  float dBottomAndLoss;
+  float a0_1, a0_2, a0_3, a0_4, a0_5;
   float a1_1, a1_2, a1_3, a1_4;
-  int del1, del2, del3;
+  int del0, del1, del2, del3, del4, del5;
   Delay<DelaySize> d0;
   Delay<DelaySize> d1;
   Delay<DelaySize> d2;

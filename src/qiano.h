@@ -5,7 +5,7 @@
 #define PIANO_MAX_NOTE 108
 
 #undef FDN_REVERB
-//#define FDN_REVERB 1
+#define FDN_REVERB 1
 
 
 #include "filter.h"
@@ -18,7 +18,9 @@
 
 enum {
   MaxDecimation = 16,
-  NumParams = 27
+  MaxLongDelay = 16,
+  TranBufferSize = MaxDecimation + MaxLongDelay + 1,
+  NumParams = 30
 };
 
 class Param {
@@ -47,6 +49,8 @@ enum parameters {
   pHammerSpringConstant,
   pHammerHysteresis,
   pBridgeImpedance,
+  pBridgeHorizontalImpedance,
+  pVerticalHorizontalImpedance,
   pHammerPosition,
   pSoundboardSize,
   pStringDecay,
@@ -64,7 +68,8 @@ enum parameters {
   pMaxVelocity,
   pStringDetuning,
   pBridgeMass,
-  pBridgeSpring
+  pBridgeSpring,
+  pDecimation
 };
 
 int getParameterIndex(const char *key);
@@ -76,6 +81,7 @@ public:
 	PianoNote(int note, int Fs, Piano *piano);
 	~PianoNote();
 	float go();
+	float goUpsampled();
 	void triggerOn(float velocity, float *tune);
 	void triggerOff();
 	bool isActive();
@@ -95,7 +101,9 @@ public:
 
 protected:
 
-  MSDFilter bridge;
+  MSD2Filter bridge;
+
+
 	bool bActive;
 	int Fs;
   BiquadHP longHP;
@@ -106,27 +114,40 @@ protected:
   float longBridgeForce;
   float longTranBridgeForce;
   float Z;
+  float Zhv;
   float vTran;
-  bool bFirstGo;
+
 
   float longForces[MaxDecimation + 1];
-  float tranForces[MaxDecimation + 1];
-  float longTranForces[MaxDecimation + 1];
   float longForcesK[MaxDecimation + 1];
+
+  float tranForces[MaxLongDelay + MaxDecimation + 1];
+  float tranForcesH[MaxLongDelay + MaxDecimation + 1];
+  float longTranForces[MaxLongDelay + MaxDecimation + 1];
+
   
   float T;
   float mu;
 	float f;
   int nstrings;
-  int t;
-  int decimation;
-	dwgs *string[3];	
+
 	dwgs *stringT[3];	
-	dwgs *stringB[3];	
+	dwgs *stringHT[3];	
   Hammer *hammer;
 
-  int iMax;
+  int t;
+  int tTran;
+  int tLong;
+  int tTranRead;
+  int tLongRead;
+  int nLongNeeded;
+  int nSamplesReady;
+  int decimation;
+  int decimationNoHammer;
+  int longDelay;
   int upsample;
+  int downSampleDelayNeeded;
+  DownSampleFIR downSampleFilter;
 };
 
 class Piano : public VstEffect

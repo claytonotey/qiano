@@ -45,6 +45,7 @@ class ConvolveReverb {
 
 
 enum {
+  ReverbTaps = 12,
   NumLengths = 18
 };
 
@@ -59,13 +60,14 @@ public:
  protected:
   int getLength(int k);
   static int allLengths[NumLengths];
-  int lengths[8];
+  int lengths[ReverbTaps];
   float Fs;
-  Delay<1024> d[8];
-  float o[8];
-  float b[8];
-  float c[8];
-  Loss<1> decay[8];
+  Delay<1024> d[ReverbTaps];
+  float o[ReverbTaps];
+  float b[ReverbTaps];
+  float c[ReverbTaps];
+  Loss decay[ReverbTaps];
+  ConvolveReverb<revSize> *conv;
   float out;
 };
 

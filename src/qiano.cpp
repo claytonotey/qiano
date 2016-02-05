@@ -9,7 +9,6 @@
 #include "utils.h"
 #include <xmmintrin.h>
 
-
 // The dwgs uses velocity waves dy/dt,  which reflect with -1
 // These wave directly interacts with the hammer
 // which has incoming string impedance Z = sqrt(T mu)
@@ -35,6 +34,8 @@ Param params[NumParams] = {
   { pHammerSpringConstant, "K", "kg / s^2" },
   { pHammerHysteresis, "alpha", "" },
   { pBridgeImpedance, "Zb", "" },
+  { pBridgeHorizontalImpedance, "ZbH", "" },
+  { pVerticalHorizontalImpedance, "Zvh", "" },
   { pHammerPosition, "pos", "" },
   { pSoundboardSize, "size", "" },
   { pStringDecay, "c1", "" },
@@ -52,7 +53,8 @@ Param params[NumParams] = {
   { pMaxVelocity, "maxv", "m/s" },
   { pStringDetuning, "detune", "%" },
   { pBridgeMass, "mb", "kg" },
-  { pBridgeSpring, "kb", "kg/s^2" } 
+  { pBridgeSpring, "kb", "kg/s^2" },
+  { pDecimation, "decimation", "" }
 };
 
 int getParameterIndex(const char *key) {
@@ -77,94 +79,144 @@ void PianoNote :: fillFrequencyTable() {
     }
 }
 
-float PianoNote :: go()
+float PianoNote :: goUpsampled()
 {
-  Value *v = piano->vals;
+  float downSampleOutput;
+  bool bLoop;
 
-  if(t == 0) {    
-    iMax = decimation;
-    if(bFirstGo) {
-      iMax++;
-      bFirstGo = false;
-    }
+  while(downSampleDelayNeeded) {
+    float output = go();
+    downSampleFilter.filter(output);
+    downSampleDelayNeeded--;
+  }
 
-    memset(longForces,0,iMax*sizeof(float));
-    memset(tranForces,0,iMax*sizeof(float));
-    memset(longTranForces,0,iMax*sizeof(float));
-    
-    for(int i=0; i<iMax; i++) {
-      
-      float vstring = 0.0;
-      float vstringT = 0.0;
-      float vstringB = 0.0;
-      for(int k=0;k<nstrings;k++) {
-        vstring += string[k]->input_velocity();
-        vstringT += stringT[k]->input_velocity();
-        vstringB += stringB[k]->input_velocity();
-      }
-      float vin = vstring*nstringsi;
-      float hload = hammer->load(vin)*Z2i;
-      
-      /* The note's string outputs sum to give a load at the bridge
-         The bridge is treated seperately for each note,
-         the sum of all incoming waves at the bridge becomes the 
-         load for the soundobard.
-         The magnitude of the tarnsverse oscillations is set by K
-         The output of the soundboard reflects back into the bridge junction,
-         and the soundboard output is also the output of the qiano 
-      */
-      
-      float sbload = 0.0;
-      float sbloadT = 0.0;
-      float sbloadB = 0.0;
-      for(int k=0;k<nstrings;k++) {
-        sbload += string[k]->go_string();
-        sbloadT += stringT[k]->go_string();
-        sbloadB += stringB[k]->go_string();
-      }
-      
-      sbload *= Z;
-      sbload = 2.0 * bridge.filter(sbload);
-      sbloadT *= alphasb;
-      sbloadB *= alphasb;
-      
-      float tranForce = 0.0f;
-      float longTranForce = 0.0f;
-      for(int k=0;k<nstrings;k++) {
-        tranForce += string[k]->go_soundboard(hload,sbload);
-        stringT[k]->go_soundboard(hload,sbloadT);
-        stringB[k]->go_soundboard(hload,sbloadB);
-
-        if(i % decimation == 0) {
-          stringT[k]->tran2long(stringT[k],stringB[k], false);        
-        }
-        else if((i+1) % decimation == 0) {
-          stringT[k]->tran2long(stringT[k],stringB[k], true);        
-        }
-        longTranForce += stringT[k]->longTran(stringT[k],stringB[k]);
-      }
-      
-      tranForces[i] = tranForce;
-      longTranForces[i] = longTranForce; 
-    }
-    
-    for(int k=0;k<nstrings;k++) {
-      stringT[k]->longForce(longForcesK, iMax, decimation);
-      for(int i=0; i<iMax; i++) {
-        longForces[i] += longForcesK[i];
-      }
+  for(int s = 0; s<upsample; s++) {
+    float output = go();
+    if(s == 0) {
+      downSampleOutput = downSampleFilter.filter(output);
+    } else {
+      downSampleFilter.filter(output);
     }
   }
-  float output = tranForces[t] * tranBridgeForce + longHP.filter(longTranForces[t] * longTranBridgeForce + longForces[t] * longBridgeForce) * v[pLongitudinalMix];
+  
+  
+  //printf("%g\n", downSampleOutput);
+  return downSampleOutput;
+}
+
+float PianoNote :: go()
+{
+  float output;
+  Value *v = piano->vals;
+
+  while(nSamplesReady == 0) {
+    float vstringT0 = 0.0;
+    float vstringT1 = 0.0;
+    
+    for(int k=0;k<nstrings;k++) {
+      vstringT0 += stringT[k]->input_velocity();
+      vstringT1 += stringT[k]->next_input_velocity();
+    }
+    float vin0 = vstringT0 * nstringsi;
+    float vin1 = vstringT1 * nstringsi;
+    float hload = hammer->load(vin0,vin1)*Z2i;
+
+    /* The note's string outputs sum to give a load at the bridge
+       The bridge is treated seperately for each note,
+       the sum of all incoming waves at the bridge becomes the 
+       load for the soundobard.
+       The magnitude of the tarnsverse oscillations is set by K
+       The output of the soundboard reflects back into the bridge junction,
+       and the soundboard output is also the output of the qiano 
+    */
+    
+    float sbloadT = 0.0;
+    float sbloadHT = 0.0;
+    
+    for(int k=0;k<nstrings;k++) {
+      sbloadT += stringT[k]->go_string();
+      sbloadHT += stringHT[k]->go_string();
+    }
+      
+    float in[2] = {sbloadT, sbloadHT};
+    float out[2];
+    bridge.filter(in, out);
+    
+    out[0] *= 2.0 * Z;
+    out[1] *= 2.0 * Z;
+    
+    //printf("%g %g %g %g\n",in[0], out[0], in[1], out[1]);
+    //out[0] = sbloadT * alphasb;
+    //out[1] = 0; 
+
+    float tranForce = 0.0f;
+    float tranForceH = 0.0f;
+    float longTranForce = 0.0f;
+    for(int k=0;k<nstrings;k++) {
+      tranForce += stringT[k]->go_soundboard(hload,out[0]);
+      tranForceH += stringHT[k]->go_soundboard(0,out[1]);
+      longTranForce += stringT[k]->longTran(stringT[k],stringT[k]);
+    }
+    
+    longTranForces[tTran] = longTranForce; 
+    tranForces[tTran] = tranForce;
+    tranForcesH[tTran] = tranForceH;
+    tTran = (tTran + 1)%TranBufferSize;
+    
+    bool bInterpReady = false;
+    if(tLong >= 0) { 
+      for(int k=0;k<nstrings;k++) {
+        // XXX ignoring horizontal -> longitudinal
+        // XXX the derivative is wrong for the first sample  (should be forward derivative not centered)
+        
+
+        if(tLong % decimation == 0) {
+          stringT[k]->tran2long(stringT[k],stringT[k], 0, longDelay);        
+        } else if((tLong-1) % decimation == 0) {
+          stringT[k]->tran2long(stringT[k],stringT[k], 1, longDelay);           
+        } else if((tLong+1) % decimation == 0) {
+          stringT[k]->tran2long(stringT[k],stringT[k], -1, longDelay);
+        }
+
+      }
+    }
+
+    tLong++;
+
+    if(tLong == nLongNeeded) {
+      int nSamples = decimation;
+      memset(longForces,0,nSamples*sizeof(float));
+      for(int k=0;k<nstrings;k++) {
+        stringT[k]->longForce(longForcesK, nSamples, decimation);
+        for(int i=0; i<nSamples; i++) {
+          longForces[i] += longForcesK[i];
+        }
+      }
+      nSamplesReady = nSamples;
+      tLong = 0;
+      if(hammer->isEscaped()) {
+        decimation = decimationNoHammer;
+      }
+      nLongNeeded = decimation;
+    }
+  }
+  //printf("%g %g %g %g\n", tranForces[t], tranForcesH[t], longTranForces[t], longForces[t]);
+      
+  //longTranBridgeForce = 0;
+  output = tranForces[tTranRead] * tranBridgeForce + tranForcesH[tTranRead] * tranBridgeForce + longHP.filter(longTranForces[tTranRead] * longTranBridgeForce + longForces[tLongRead] * longBridgeForce) * v[pLongitudinalMix];
   //output = tranForces[t] * tranBridgeForce;
   float delayed = outputdelay.goDelay(output);
   energy = energy + output*output - delayed*delayed;
   if(energy>maxEnergy)
     maxEnergy = energy;
 
-  t++;
-  if(t == iMax) t = 0;
- 
+  tTranRead = (tTranRead + 1)%TranBufferSize;
+  tLongRead++;
+  if(tLongRead == nSamplesReady) {
+    tLongRead = 0;
+    nSamplesReady = 0;
+  }
+
   return output;
 }
 
@@ -228,6 +280,8 @@ void Piano :: init(float Fs, int blockSize)
   setParameter(pHammerHysteresis, 0.5);
   setParameter(pHammerPosition, 2.0/7.0);
   setParameter(pBridgeImpedance, 0.5);
+  setParameter(pBridgeHorizontalImpedance, 0.5);
+  setParameter(pVerticalHorizontalImpedance, 0.5);
   setParameter(pSoundboardSize, 0.0);
   setParameter(pStringDecay, 0.25);
   setParameter(pStringLopass, 0.5);
@@ -245,6 +299,7 @@ void Piano :: init(float Fs, int blockSize)
   setParameter(pStringDetuning, 0.5);
   setParameter(pBridgeMass, 0.5);
   setParameter(pBridgeSpring, 0.5);
+  setParameter(pDecimation, 0.5);
 }
 
 Piano :: Piano(audioMasterCallback audioMaster, int parameters) : VstEffect(audioMaster, parameters){
@@ -263,7 +318,6 @@ Piano :: Piano(audioMasterCallback audioMaster, int parameters) : VstEffect(audi
 }
 
 PianoNote :: PianoNote(int note, int Fs, Piano *piano) {
-  upsample = 1;
   this->Fs = Fs;
   this->note = note;
   this->f = freqTable[note];
@@ -277,16 +331,14 @@ PianoNote :: PianoNote(int note, int Fs, Piano *piano) {
   else 
     nstrings = 3;
 
-  nstrings = 1;
+  //nstrings = 1;
   nstringsi = 1.0/(float)nstrings;
   
-  float Fsup = Fs * upsample;
   for(int k=0;k<nstrings;k++) {
-    string[k] = new dwgs(Fsup,BothDispersion);
-    stringT[k] = new dwgs(Fsup,NoTopDispersion);
-    stringB[k] = new dwgs(Fsup,NoBottomDispersion);
+    stringT[k] = new dwgs(Fs);
+    stringHT[k] = new dwgs(Fs);
   }
-  hammer = new Hammer(Fsup);
+  hammer = new Hammer(Fs);
 
   longHP.create(0.15,0.5);
 
@@ -364,11 +416,8 @@ void PianoNote :: triggerOn(float velocity, float *tune)
   longBridgeForce = Zlong*square(vLong/vTran) / L / Fs;
   longTranBridgeForce = 0.5 * Zlong * (vLong / vTran) / vTran;
   
-
-  hammer->set(m,K,p,Z,alpha);
-
   Z2i = 1.0/(2*Z);
-  alphasb = (2*Z)/(Z*nstrings+v[pBridgeImpedance]);
+  alphasb = (2*Z)/(Z*nstrings + v[pBridgeImpedance]);
 
   float Zb = v[pBridgeImpedance];
   float hp = v[pHammerPosition];
@@ -377,15 +426,23 @@ void PianoNote :: triggerOn(float velocity, float *tune)
 
   float mBridge = v[pBridgeMass];
   float kBridge = v[pBridgeSpring];
+  
 
   //fprintf(stderr,"f = %g, r = %g mm, L = %g, T = %g, hpos = %g, hm = %g, Z = %g, K = %g, B = %g, Zb = %g, alpha = %g, p = %g, vTran=%g, vLong=%g, mBridge=%G, kBridge=%g\n",f,1000*r,L,T,hp,m,Z,K,B,Zb,alpha,p,vTran,vLong,mBridge,kBridge);
+ 
+  float ZbH = v[pBridgeHorizontalImpedance];
+  float Zhv = v[pVerticalHorizontalImpedance];
+  float khv = kBridge * 0.;
 
+  
 
-  bridge.create(Fs,mBridge,kBridge,Zb,Z*nstrings);
   float ES = E*S;
   float gammaL = v[pLongitudinalGamma];
   float gammaL2 = v[pLongitudinalGammaQuadratic];
-  int del1 = -1;
+
+
+  int upsampleMin = 1;
+  int decimationMax = MaxDecimation;
 	for(int k=0;k<nstrings;k++) {
     float fk;
     if(tune) {
@@ -393,21 +450,61 @@ void PianoNote :: triggerOn(float velocity, float *tune)
     } else {
       fk = f*(1 + (TUNE[nstrings-1][k]-1) * v[pStringDetuning]);
     }
-    
-		string[k]->set(upsample,fk,v[pStringDecay],v[pStringLopass],B,L,longFreq1,gammaL,gammaL2,v[pHammerPosition],Z,del1);
-		stringT[k]->set(upsample,fk,v[pStringDecay],v[pStringLopass],B,L,longFreq1,gammaL,gammaL2,v[pHammerPosition],Z,del1);
-		stringB[k]->set(upsample,fk,v[pStringDecay],v[pStringLopass],B,L,longFreq1,gammaL,gammaL2,v[pHammerPosition],Z,del1);
+    upsampleMin = max(upsampleMin, stringT[k]->getMinUpsample(fk, hp));
+  }
+  upsample = upsampleMin;
 
-    del1 = string[k]->getHammerNutDelay();
+	for(int k=0;k<nstrings;k++) {
+    float fk;
+    if(tune) {
+      fk = f*(1 + (tune[k]-1) * v[pStringDetuning]);
+    } else {
+      fk = f*(1 + (TUNE[nstrings-1][k]-1) * v[pStringDetuning]);
+    }
+    decimationMax = min(decimationMax, stringT[k]->getMaxDecimation(fk, upsample,v[pDecimation]));
+  }
+  decimation = decimationMax;
+
+  bridge.create(upsample*Fs,
+                mBridge,kBridge,Zb,
+                mBridge,kBridge,ZbH,
+                Zhv,khv,
+                Z*nstrings);
+
+  hammer->set(upsample,m,K,p,Z,alpha);
+
+	for(int k=0;k<nstrings;k++) {
+    float fk;
+    if(tune) {
+      fk = f*(1 + (tune[k]-1) * v[pStringDetuning]);
+    } else {
+      fk = f*(1 + (TUNE[nstrings-1][k]-1) * v[pStringDetuning]);
+    }
+    stringT[k]->set(upsample,fk,v[pStringDecay],v[pStringLopass],B,L,longFreq1,gammaL,gammaL2,v[pHammerPosition],Z);
+    stringHT[k]->set(upsample,fk,v[pStringDecay],v[pStringLopass],B,L,longFreq1,gammaL,gammaL2,v[pHammerPosition],Z);
 	}
 	hammer->strike(velocity);
 	maxEnergy = 0.0;
 	energy = 0.0;
-  bFirstGo = true;
+  
 	outputdelay.clear();
 	bActive = true;
+  longDelay = 10;
   t = 0;
-  decimation = 8;
+  tTran = 0;
+  tLong = -longDelay;
+  tLongRead = 0;
+  tTranRead = 0;
+  nSamplesReady = 0;
+  decimationNoHammer = decimation;
+  decimation = 1;
+  nLongNeeded = decimation + 2;
+  
+  //nLongNeeded = 3;
+  downSampleFilter.create(upsample);
+  downSampleDelayNeeded = downSampleFilter.getDelay();
+
+  fprintf(stderr,"upsample/decimation  %d %d\n",upsample, decimationNoHammer);
 }
 
 void PianoNote :: triggerOff() 
@@ -416,9 +513,8 @@ void PianoNote :: triggerOff()
   float gammaLDamped = v[pLongitudinalGammaDamped];
   float gammaL2Damped = v[pLongitudinalGammaQuadraticDamped];
 	for(int k=0;k<nstrings;k++) {
-		string[k]->damper(v[pDampedStringDecay],v[pDampedStringLopass],gammaLDamped,gammaL2Damped);
 		stringT[k]->damper(v[pDampedStringDecay],v[pDampedStringLopass],gammaLDamped,gammaL2Damped);
-		stringB[k]->damper(v[pDampedStringDecay],v[pDampedStringLopass],gammaLDamped,gammaL2Damped);
+		stringHT[k]->damper(v[pDampedStringDecay],v[pDampedStringLopass],gammaLDamped,gammaL2Damped);
 	}
 }
 
@@ -435,7 +531,8 @@ bool PianoNote :: isActive()
 
 PianoNote :: ~PianoNote() {
  for(int k=0;k<nstrings;k++) {
-    delete string[k];
+    delete stringT[k];
+    delete stringHT[k];
   } 
   delete hammer;
 }
@@ -453,7 +550,7 @@ void Piano :: process(float *out, int samples)
     PianoNote *v = voiceList;
     float output = 0;
     do {
-      if(v) output += v->go();
+      if(v) output += v->goUpsampled();
     } while(v && (v=v->next) && (v!= voiceList));  
 #ifdef FDN_REVERB
     out[i] = vals[pVolume] * soundboard->reverb(output);
@@ -593,6 +690,12 @@ void Piano::setParameter (VstInt32 index, float value)
   case pBridgeImpedance:
     p.v = 4000.0 * exp(12.0 * (value - 0.5));
     break;
+  case pBridgeHorizontalImpedance:
+    p.v = 40000.0 * exp(12.0 * (value - 0.5));
+    break;
+  case pVerticalHorizontalImpedance:
+    p.v = 400.0 * exp(12.0 * (value - 0.5));
+    break;
   case pHammerPosition:
     p.v = value * 0.5;
     break;
@@ -655,6 +758,9 @@ void Piano::setParameter (VstInt32 index, float value)
     break;
   case pBridgeSpring:
     p.v = 1e5 * exp(20.0 * (value - 0.5));
+    break;
+  case pDecimation:
+    p.v = (value * 200);
     break;
   }
 
@@ -727,33 +833,33 @@ int main(int c, char **v)
   int t = atof(v[2]);
   int vel = atoi(v[3]);
   int N = atoi(v[4]);
-  float gammaL = atof(v[5]);
+  float magic = atof(v[5]);
 
   float *in[2];
   float *out[2];
 
-  in[0] = new float[2*t];
-  in[1] = new float[2*t];
-  out[0] = new float[2*t];
-  out[1] = new float[2*t];
+  in[0] = new float[t];
+  in[1] = new float[t];
+  out[0] = new float[t];
+  out[1] = new float[t];
 
   AudioEffect *effect = createEffectInstance(vst2xPluginHostCallback);
   int blockSize = 512;
   effect->setBlockSize(blockSize);
   effect->resume();
-  effect->setParameter(pLongitudinalGamma,gammaL);
-  effect->setParameter(pLongitudinalMix,0);
+  effect->setParameter(pDecimation,magic);
+
   
   for(int k=0; k<N; k++) {
     MidiEvent midiEvents[2];
     midiEvents[0].noteOn(note,vel,0,0);
-    //midiEvents[1].noteOff(note,vel,0,t/2);
+    midiEvents[1].noteOff(note,vel,0,t/2);
+    
+    processMidiEvents(effect, midiEvents, 2);
 
-    processMidiEvents(effect, midiEvents, 1);
 
-
-    for(int i=0; i<2*t; i += blockSize) {
-      int block = std::min(blockSize,2*t - i);
+    for(int i=0; i<t; i += blockSize) {
+      int block = std::min(blockSize,t - i);
       //fprintf(stderr,"block = %d %d\n",block,blockSize);
       float *in2[2];
       float *out2[2];
@@ -766,7 +872,7 @@ int main(int c, char **v)
     }
   }
 
-  for(int k=0; k<t*2; k++) {
+  for(int k=0; k<t; k++) {
     //printf("%g\n",out[0][k]);
   }
 }
@@ -790,3 +896,16 @@ extern "C" void qianoNote(int note, int N, float velocity, float *x, float *tune
     effect->process(x+i,block);
   }
 }
+
+
+
+/*
+Zhh - h --- Z 
+     Zhv
+Zvv - v --- Z 
+
+  h --- Z
+ Zhv
+  v --- Z
+
+*/

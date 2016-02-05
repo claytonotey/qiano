@@ -5,6 +5,7 @@
 #include <string.h>
 #include "types.h"
 #include "utils.h"
+#include "AudioFFT.h"
 
 #include "filter.h"
 #include <math.h>
@@ -128,6 +129,13 @@ float sse_dot(int N, float *A, float *B) {
     return dot;
 }
 
+float dsp_dot(int N, float *A, float *B)
+{
+  float C;
+  vDSP_dotpr(A,1,B,1,&C,N);
+  return C;
+}
+
 void *_aligned_malloc(size_t size, size_t align)
 {
   void *p;
@@ -149,17 +157,23 @@ float *filter_malloc(int size)
 Filter :: Filter(int nmax)
 {
   this->nmax = nmax;
-  b = (float*)malloc(2*(nmax+1)*sizeof(float));	
-  x = (float*)malloc(2*(nmax+1)*sizeof(float));
-  memset(x,0,2*(nmax+1)*sizeof(float));
+  posix_memalign((void**)&b,32,2*(nmax+1)*sizeof(float));
+  //b = (float*)malloc(2*(nmax+1)*sizeof(float));	
+  x = (float*)malloc(2*(nmax*MaxFilterUpsample+2)*sizeof(float));
+  memset(x,0,2*(nmax*MaxFilterUpsample+2)*sizeof(float));
   memset(b,0,2*(nmax+1)*sizeof(float));
   xc = x;
-  xend = x+2*nmax;
+  int xsize = 2*nmax*MaxFilterUpsample;
+  xend = x+xsize;
+  xskip = xsize + 2;
 }
 
-void Filter :: init()
+void Filter :: init(int upsample)
 {
+  this->upsample = upsample;
   bend = b + (n << 1);
+  xstep = upsample << 1;
+
 }
 
 float Db(float B, float f, int M) 
@@ -225,7 +239,7 @@ float Filter :: phasedelay(float omega)
   float arg = atan2(H[1],H[0]);
   if(arg<0) arg = arg + 2*PI;
   
-  return arg/omega;
+  return arg/omega * upsample;
 }
 
 
@@ -234,7 +248,7 @@ float Filter :: groupdelay(float omega)
   float dw = .001;
   float omega2 = omega + dw;
   float omega1 = omega - dw;
-  return (omega2*phasedelay(omega2) - omega1*phasedelay(omega1))/(omega2-omega1);
+  return (omega2*phasedelay(omega2) - omega1*phasedelay(omega1))/(omega2-omega1)* upsample;
 }
 
 
@@ -259,16 +273,15 @@ void Filter :: merge(const Filter &c1, const Filter &c2)
 	init();
 }
 
-void Thiran :: create(float D, int N) 
+void Thiran :: create(float D, int N, int upsample) 
 {
   if(N < 1) {
     n = 0;
     b[0] = 1;
     b[1] = 0;
-    init();
+    init(upsample);
     return;
   }
-
   
   int choose = 1;
   for(int k=0;k<=N;k++) {
@@ -283,10 +296,10 @@ void Thiran :: create(float D, int N)
   }  
 
   n = N;
-  init();
+  init(upsample);
 }
 
-void ThiranDispersion :: create(float B, float f, int M)
+void ThiranDispersion :: create(float B, float f, int M, int upsample)
 {
   int N = 2;
   float D;
@@ -300,9 +313,9 @@ void ThiranDispersion :: create(float B, float f, int M)
     b[0] = 1;
     b[2] = 0;
     b[4] = 0;	
-    init();
+    init(upsample);
   } else {
-    Thiran :: create(D,N);
+    Thiran :: create(D,N,upsample);
   }
 }
 
@@ -423,4 +436,158 @@ void MSDFilter :: create(float Fs, float m, float k, float mu, float RT)
 
   n = 2;
   init();
+}
+
+
+void MSD2Filter :: filter(float in[2], float out[2])
+{
+  
+  //out[0] = f11.filter(in[0]) + f12.filter(in[1]);
+  //out[1] = f21.filter(in[0]) + f22.filter(in[1]);
+  out[0] = f11 * in[0] + f12 * in[1];
+  out[1] = f21 * in[0] + f22 * in[1];
+}
+
+void MSD2Filter :: create(float Fs,
+                          float m1, float k1, float R1, 
+                          float m2, float k2, float R2,
+                          float R12, float k12, float Z) 
+{
+  float det = (R1 + Z) * (R2 + Z) - R12 * R12;
+  f11 = (R2 + Z) / det;
+  f12 = -R12 / det;
+  f21 = -R12 / det;
+  f22 = (R1 + Z) / det;
+
+  float alpha = 2 * Fs;
+  m2 *= alpha * alpha;
+  m1 *= alpha * alpha;
+  R1 *= alpha;
+  R2 *= alpha;
+  R12 *= alpha;
+  Z *= alpha;
+
+  /*
+  float a0 = -square(k12 + R12) + (k1 + m1 + R1 + Z) * (k2 + m2 + R2 + Z);
+
+  f11.b[1] = 1.0;
+  f11.b[3] = 2.0 * ((k2 - m2) * (R1 + Z) + k1 * (2.0 * k2 + R2 + Z) - m1 * (2 * m2 + R2 + Z) - 2.0 * k12 * (k12 + R12)) / a0;
+  f11.b[5] = 2.0 * (3.0 * k1 * k2 - k2 * m1 - k1 * m2 + 3 * m1 *m2 + square(R12) - (R1 + Z) * (R2 + Z) - 3.0 * square(k12)) / a0; 
+  f11.b[7] = 2.0 * (k1 * (2 * k2 - R2 - Z) - (k2 - m2) * (R1 + Z) + m1 * (-2.0 * m2 + R2 + Z) + 2.0 * k12 * (R12 - k12)) / a0;
+  f11.b[9] = (-square(R12 - k12) + (k1 + m1 - R1 - Z) * (k2 + m2 - R2 - Z)) / a0;
+  
+  f11.b[0] = alpha * (k2 + m2 + R2 + Z) / a0;
+  f11.b[2] = 2.0 * alpha * (k2 - m2) / a0;
+  f11.b[4] = -2.0 * alpha * (R2 + Z) / a0;
+  f11.b[6] = 2.0 * alpha * (-k2 + m2) / a0;
+  f11.b[8] = alpha * (-k2 - m2 + R2 + Z) / a0;
+
+
+  f12.b[0] = -alpha * (R12 + k12) / a0;
+  f12.b[2] = -2.0 * alpha * k12 / a0;
+  f12.b[4] = 2.0 * alpha * R12 / a0;
+  f12.b[6] = 2.0 * alpha * k12 / a0;
+  f12.b[8] = alpha * (k12 - R12) / a0;
+  f12.b[1] = 1.0;
+  f12.b[3] = f11.b[3];
+  f12.b[5] = f11.b[5];
+  f12.b[7] = f11.b[7];
+  f12.b[9] = f11.b[9];
+
+  f21.b[0] = f12.b[0];
+  f21.b[2] = f12.b[2];
+  f21.b[4] = f12.b[4];
+  f21.b[6] = f12.b[6];
+  f21.b[8] = f12.b[8];
+  f21.b[1] = 1.0;
+  f21.b[3] = f12.b[3];
+  f21.b[5] = f12.b[5];
+  f21.b[7] = f12.b[7];
+  f21.b[9] = f12.b[9];
+
+
+  f22.b[0] = alpha * (k1 + m1 + R1 + Z) / a0;
+  f22.b[2] = 2.0 * alpha * (k1 - m1) / a0;
+  f22.b[4] = -2.0 * alpha * (R1 + 1) / a0;
+  f22.b[6] = 2.0 * alpha * (-k1 + m1) / a0;
+  f22.b[8] = alpha * (-k1 - m1 + R1 + Z) / a0;
+  f22.b[1] = 1.0;
+  f22.b[3] = f11.b[3];
+  f22.b[5] = f11.b[5];
+  f22.b[7] = f11.b[7];
+  f22.b[9] = f11.b[9];
+
+
+  f11.n = 4;
+  f11.init();
+
+  f12.n = 4;
+  f12.init();
+
+  f21.n = 4;
+  f21.init();
+
+  f22.n = 4;
+  f22.init();
+*/
+
+}
+
+float DownSampleFIR :: filter(float in)
+{
+  float *b = this->b;
+  float *x = this->xc;
+
+  float out = *(b) * in;  
+  b++;
+  x++;
+
+  while(b <= bend) {
+    if(x>xend) x = this->x;
+    out += *(b) * *(x);
+    b++;
+    x++;
+  }
+  x = this->xc;
+  *(x) = in;
+  x--; if(x<this->x) x = xend; this->xc = x;
+
+  return out;
+}
+
+int DownSampleFIR :: getDelay()
+{
+  return DownSampleFilterSize / 2;
+}
+
+void DownSampleFIR :: create(int DownSample)
+{
+  float f[DownSampleFilterSize];
+  float im[DownSampleFilterSize];
+
+  bend = this->b + DownSampleFilterSize - 1;
+  xend = this->x + DownSampleFilterSize - 1;
+  
+  memset(f,0,DownSampleFilterSize*sizeof(float));
+  memset(im,0,DownSampleFilterSize*sizeof(float));
+  memset(x,0,DownSampleFilterSize*sizeof(float));
+  xc = x;
+
+  f[0] = 1.0;
+  for(int i=1; i<DownSampleFilterSize/DownSample/2; i++) {
+    f[i] = 1.0;
+    f[DownSampleFilterSize - i] = 1.0;
+  }
+  audiofft::AudioFFT fft;
+  fft.init(DownSampleFilterSize);
+  fft.ifft(b, f, im);
+  // fftshift
+  int shift = DownSampleFilterSize / 2;
+  for(int i=0; i<shift; i++) {
+    float tmp  = b[i];
+    b[i] = b[i+shift];
+    b[i+shift] = tmp;
+  }
+
+
 }
