@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 int Reverb :: allLengths[NumLengths] =
-  {37,87,181,271,359,592,687,721,769,839,911,953,1103,1259,1321,1429,1669,1867};
+  {37,87,181,271,359,592,687,721,769,839,911,953,1103,1259,1321,1429,1669,1867,1999,2123,2443,2767,3013};
 
 int Reverb :: getLength(int k)
 {
@@ -13,12 +13,12 @@ int Reverb :: getLength(int k)
 
 Reverb :: Reverb(float Fs) 
 {
-  conv = new ConvolveReverb<revSize>(1);
+  //conv = new ConvolveReverb<revSize>(1);
   this->Fs = Fs;
   for(int k=0;k<ReverbTaps;k++) {
     o[k] = 0;
     b[k] = 1;
-    c[k] = k<ReverbTaps?((k%2==0)?1.0/ReverbTaps:-1.0/ReverbTaps):0.0;
+    c[k] = k<ReverbTaps?((k%2==0)?0.5/ReverbTaps:-0.5/ReverbTaps):0.0;
   }
   out = 0.0;
 }
@@ -34,6 +34,7 @@ void Reverb :: set(float size, float c1, float c3)
     d[k].setDelay(getLength(k));
     decay[k].create(Fs/getLength(k),c1,c3);
   }
+  scale = -2.0 / ReverbTaps;
 }
 
 float Reverb :: probe()
@@ -48,7 +49,7 @@ float Reverb :: reverb(float in)
   for(int j=0;j<ReverbTaps;j++) {
     fb += o[j];
   }
-  fb *= -2.0 / ReverbTaps;
+  fb *= scale;
   for(int j=0;j<ReverbTaps;j++) {
     i[j] = b[j] * in + o[(j+1)%ReverbTaps] + fb;
     //fprintf(stderr,"%g ",i[j]);
@@ -59,10 +60,32 @@ float Reverb :: reverb(float in)
   out = 0.0;
   for(int j=0;j<ReverbTaps;j++) {
     o[j] = decay[j].filter(d[j].goDelay(i[j]));
-    out += c[j] * o[j]*.5;
+    out += c[j] * o[j];
   }
   return out;
 }
+
+/*
+vec4 Reverb :: reverb4(vec4 in) 
+{
+  vec4 i[ReverbTaps];
+  float fb = 0;
+  for(int j=0;j<ReverbTaps;j++) {
+    fb += o[j];
+  }
+  fb *= scale;
+  for(int j=0;j<ReverbTaps;j++) {
+    i[j] = b[j] * in + o[(j+1)%ReverbTaps] + fb;
+  }
+
+  vec4 out = {0};
+  for(int j=0;j<ReverbTaps;j++) {
+    o4[j] = decay[j].filter4(d[j].goDelay4(i[j]));
+    out += c[j] * o4[j];
+  }
+  return out;
+}
+*/
 
 template<>
 float ConvolveReverb<revSize>::res[revSize] __attribute__ ((aligned(32))) = {

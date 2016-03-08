@@ -1,11 +1,10 @@
 #ifndef HAMMER_H
 #define HAMMER_H
-#include <stdio.h>
 
 class Hammer {
 public:
-  Hammer(float Fs);
-  void set(int upsample, float m, float K, float p, float Z, float alpha);
+  Hammer();
+  void set(float Fs, float m, float K, float p, float Z, float alpha, int escapeDelay);
   ~Hammer();
   
   float getX();
@@ -21,12 +20,11 @@ protected:
   float a;
 
   bool bEscaped;
+  int escapeDelay;
   int escapeCount;
-  int upsample;
   float mi;
   float K;
   float p;
-  float Fs;
   float F;
   float upprev;
   float alpha;

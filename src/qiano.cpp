@@ -419,8 +419,13 @@ PianoNote :: PianoNote(int note, int Fs, Piano *piano) {
   hammer = new Hammer();
 
   outputdelay.setDelay(Fs);
-  energy = 0.0;
-  maxEnergy = 0.0;
+
+  longDelay = 8;
+  tUp = 0;
+  tDown = 0;
+  tTran = 0;
+  tLong = -longDelay;
+  tTranRead = 0;
   bInit4 = false;
   bActive = false;
 }
@@ -428,7 +433,7 @@ PianoNote :: PianoNote(int note, int Fs, Piano *piano) {
 bool PianoNote :: isDone()
 {
   //return false;
-	return (energy<1e-9*maxEnergy);
+	return (energy<1e-8*maxEnergy);
 }
 
 void PianoNote :: triggerOn(float velocity, float *tune) 
@@ -612,14 +617,6 @@ void PianoNote :: triggerOn(float velocity, float *tune)
   longTranBridgeForce /= resample;
   
 	outputdelay.clear();
-  longDelay = 8;
-  t = 0;
-  tUp = 0;
-  tDown = 0;
-  tTran = 0;
-  tLong = -longDelay;
-  tTranRead = 0;
-
   longHP.create(0.15*downsample,0.5);
 
   // XXX should only create once

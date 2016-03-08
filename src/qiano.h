@@ -1,7 +1,8 @@
+
 #ifndef PIANO_H
 #define PIANO_H
 
-#define PIANO_MIN_NOTE 22
+#define PIANO_MIN_NOTE 21
 #define PIANO_MAX_NOTE 108
 
 #undef FDN_REVERB
@@ -12,15 +13,14 @@
 #include "dwgs.h"
 #include "reverb.h"
 #include "hammer.h"
-#include "types.h"
 #include "midi.h"
 #include "vsteffect.h"
 
 enum {
   MaxDecimation = 16,
   MaxLongDelay = 16,
-  TranBufferSize = MaxDecimation + MaxLongDelay + 1,
-  NumParams = 30
+  TranBufferSize = 32,
+  NumParams = 34
 };
 
 class Param {
@@ -43,6 +43,7 @@ enum parameters {
   pYoungsModulus = 0,
   pStringDensity,
   pHammerMass,
+  pStringTension,
   pStringLength,
   pStringRadius,
   pHammerCompliance,
@@ -64,12 +65,15 @@ enum parameters {
   pLongitudinalGammaDamped,
   pLongitudinalGammaQuadraticDamped,
   pLongitudinalMix,
+  pLongitudinalTransverseMix,
   pVolume,
   pMaxVelocity,
   pStringDetuning,
   pBridgeMass,
   pBridgeSpring,
-  pDecimation
+  pDwgs4,
+  pDownsample,
+  pLongModes
 };
 
 int getParameterIndex(const char *key);
@@ -81,7 +85,11 @@ public:
 	PianoNote(int note, int Fs, Piano *piano);
 	~PianoNote();
 	float go();
-	float goUpsampled();
+	vec4 go4();
+	float goUp();
+	float goUpDelayed();
+	float goDown();
+	float goDownDelayed();
 	void triggerOn(float velocity, float *tune);
 	void triggerOff();
 	bool isActive();
@@ -91,7 +99,7 @@ public:
 	PianoNote *prev;	
 	int note;
   Piano *piano;
-
+  
 	bool isDone();
 	float maxEnergy;
 	float energy;
@@ -117,13 +125,13 @@ protected:
   float Zhv;
   float vTran;
 
-
+  int downsample;
   float longForces[MaxDecimation + 1];
   float longForcesK[MaxDecimation + 1];
 
-  float tranForces[MaxLongDelay + MaxDecimation + 1];
-  float tranForcesH[MaxLongDelay + MaxDecimation + 1];
-  float longTranForces[MaxLongDelay + MaxDecimation + 1];
+  float tranForces[TranBufferSize]  __attribute__((aligned(32)));
+  float tranForcesH[TranBufferSize]  __attribute__((aligned(32)));
+  float longTranForces[TranBufferSize]  __attribute__((aligned(32)));
 
   
   float T;
@@ -135,19 +143,22 @@ protected:
 	dwgs *stringHT[3];	
   Hammer *hammer;
 
-  int t;
+  float outUp[8] __attribute__((aligned(32)));
+  float outDown[8] __attribute__((aligned(32)));
+  int tUp;
+  int tDown;
+  int upSampleDelayNeeded;
+  int downSampleDelayNeeded;
+
+  bool bInit4;
   int tTran;
   int tLong;
   int tTranRead;
-  int tLongRead;
-  int nLongNeeded;
-  int nSamplesReady;
-  int decimation;
-  int decimationNoHammer;
   int longDelay;
   int upsample;
-  int downSampleDelayNeeded;
-  DownSampleFIR downSampleFilter;
+
+  ResampleFIR downSampleFilter;
+  ResampleFIR upSampleFilter;
 };
 
 class Piano : public VstEffect

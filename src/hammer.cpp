@@ -1,24 +1,24 @@
 #include "hammer.h"
-#include "types.h"
 #include <math.h>
 #include <stdio.h>
+#include "utils.h"
 
 enum {
   S = 3
 };
 
-Hammer :: Hammer(float Fs)
+Hammer :: Hammer()
 {
-  this->Fs = Fs;
   this->x = 0;
   this->a = 0.0;
   this->F = 0.0;
   this->upprev = 0;
 }
 
-void Hammer :: set(int upsample, float m, float K, float p, float Z, float alpha) 
+void Hammer :: set(float Fs, float m, float K, float p, float Z, float alpha, int escapeDelay) 
 {
-  this->dt = 1.0/(Fs*S*upsample);
+  this->escapeDelay = escapeDelay;
+  this->dt = 1.0/(Fs*S);
   this->dti = 1.0/dt;
   this->p = p;
   this->K = K;
@@ -40,7 +40,7 @@ void Hammer :: strike(float v)
 }
 
 float Hammer :: load(float vin0, float vin1) {
-  static FILE *fp = fopen("hammer","w");
+  //static FILE *fp = fopen("hammer","w");
   if(bEscaped) return 0.0;
 
   float vin = vin0;
@@ -72,7 +72,7 @@ float Hammer :: load(float vin0, float vin1) {
   }
   if(F == 0) {
     escapeCount++;
-    if(escapeCount > 100) {
+    if(escapeCount > escapeDelay) {
       bEscaped = true;
     }
   } else {

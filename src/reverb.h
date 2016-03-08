@@ -1,6 +1,7 @@
 #ifndef REVERB_H
 #define REVERB_H
-#include <stdio.h>
+
+#include "utils.h"
 #include "filter.h"
 #include "FFTConvolver.h"
 #include "TwoStageFFTConvolver.h"
@@ -46,7 +47,7 @@ class ConvolveReverb {
 
 enum {
   ReverbTaps = 12,
-  NumLengths = 18
+  NumLengths = 23
 };
 
 
@@ -66,6 +67,13 @@ public:
   float o[ReverbTaps];
   float b[ReverbTaps];
   float c[ReverbTaps];
+
+  vec4 o4[ReverbTaps];
+  vec4 b4[ReverbTaps];
+  vec4 c4[ReverbTaps];
+
+  float scale;
+
   Loss decay[ReverbTaps];
   ConvolveReverb<revSize> *conv;
   float out;
