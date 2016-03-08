@@ -230,16 +230,12 @@ void processMidiEvents(AudioEffect *effect, MidiEvent *midiEvent, int numEvents)
   vstEvents.events[0] = (VstEvent*)malloc(sizeof(VstMidiEvent) * vstEvents.numEvents);
   
   for(int i=0; i<numEvents; i++) {
-    VstMidiEvent* vstMidiEvent = (VstMidiEvent*)malloc(sizeof(VstMidiEvent));
+    VstMidiEvent* vstMidiEvent = (VstMidiEvent*)&(vstEvents.events[0][i]);
     fillVstMidiEvent(&midiEvent[i], vstMidiEvent);
-    vstEvents.events[i] = (VstEvent*)vstMidiEvent;
   }
 
   effect->dispatcher(effProcessEvents, 0, 0, &vstEvents, 0.0f);
-  for(int i = 0; i < vstEvents.numEvents; i++) {
-    free(vstEvents.events[i]);
-  }
-  //free(vstEvents.events[0]);
+  free(vstEvents.events[0]);
 }
 
 void processReplacing(AudioEffect *effect, float **in, float **out, VstInt32 samples) 
