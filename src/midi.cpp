@@ -87,7 +87,7 @@ prossible & allowable for processEvents() to be called more than once per block.
       blockEvents[*numBlockEvents].delta = midiEvent->deltaFrames;	// timing offset
       
       (*numBlockEvents)++;
-	} else if ( (status == 0xb0) ) {
+	} else if (status == 0xb0) {
       blockEvents[*numBlockEvents].eventStatus = isControl;	// status
       blockEvents[*numBlockEvents].byte1 = midiData[1] & 0x7f;	// LSB
       blockEvents[*numBlockEvents].byte2 = midiData[2] & 0x7f;	// MSB

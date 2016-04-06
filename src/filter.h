@@ -1,64 +1,52 @@
 #ifndef FILTER_H
 #define FILTER_H
 
-#include "types.h"
+#include "utils.h"
 #include <string.h>
-#include "sse.h"
+#include <iostream>
+#include <math.h>
 
-#ifndef __has_extension
-#define __has_extension(x) 0
-#endif
-#define vImage_Utilities_h
-#define vImage_CVUtilities_h
+enum {
+  MaxFilterUpsample = 8
+};
 
-#include <Accelerate/Accelerate.h>
-
-void sse_dotN(int N, float *A, float *B, float *C);
-float sse_dot(int N, float *A, float *B);
-float dot(int N, float *A, float *B);
 
 class Filter {
  public:
   Filter(int n);
   ~Filter();
-  float phasedelay(float omega);
-  float groupdelay(float omega);
-  void merge(const Filter &c1, const Filter &c2);
-  inline float filter(float in);
-  void init();
 
+  void merge(const Filter &f);
+  vec4 filter4(vec4 in);
+  float filter(float in);
+  float phasedelay(float omega);
+  void init(int upsample = 1);
+  
   float *x;
-  float *xc;
-  float *xend;
+  float *y;
   float *b;
+  float *a;
+
   float *bend;
+  float *aend;
+  float *aend4;
+
+  float *xc;  
+  float *yc;
+
+  float *xend;  
+  float *yend;
+
+  vec4 a0;
+  vec4 a1;
+  vec4 a2;
+  vec4 a3;
+
+  int upsample;
+  int xskip;
   int n;
   int nmax;
 };
-
-
-inline float Filter :: filter(float in) 
-{
-  float *b = this->b;
-  float *x = this->xc;
-  float out = *(b) * in;  
-  b+=2;
-  x+=2;
-
-  while(b <= bend) {
-    if(x>xend) x = this->x;
-    out += *(b) * *(x);
-    out -= *(b+1) * *(x+1);
-    b+=2;
-    x+=2;
-  }
-  x = this->xc;
-  *(x) = in;
-  *(x+1) = out;
-  x-=2; if(x<this->x) x = xend; this->xc = x;
-
-  return out;
-}
 
 class BiquadHP : public Filter 
 {
@@ -67,11 +55,135 @@ class BiquadHP : public Filter
   void create(float omega, float Q);
 };
 
+class Thiran : public Filter {
+ public:
+ Thiran(int n) : Filter(n) {}
+  void create(float D, int N, int upsample = 1);
+};
+
+// nmax = 16 (max upsample is 8)
+class ThiranDispersion : public Thiran {
+ public:
+ ThiranDispersion() : Thiran(16) {}
+  void create(float B, float f, int M, int downsample = 1, int upsample = 1);
+};
+
+
+class Loss : public Filter
+{
+ public:
+ Loss() : Filter(1) {}
+  /*
+  float filter(float in) {
+    float out = b[1] * in + a[0] * y[0];
+    y = out;
+    return out;
+  }
+  */
+
+  void create(float f0, float c1, float c3, float upsample = 1) {
+    f0 /= upsample;
+    c1 /= upsample;
+    c3 *= upsample;
+    float g = 1.0 - c1/f0; 
+    float c = 4.0*c3 + f0;
+    float a1 = (-c+sqrt(c*c-16.0*c3*c3))/(4.0*c3);
+    b[0] = g*(1+a1);
+    b[1] = 0;
+    a[0] = -1;
+    a[1] = -a1;
+    n = 1;
+    init(1);
+   }
+};
+
+template <int size>
+class Delay
+{
+ public:
+  int di; 
+  int d1;
+  int cursor;
+  
+  float *x;
+  float x_[size+16] __attribute__((aligned(32)));
+
+  enum {
+    mask = size-1 };
+
+  Delay(int offset = 0) {
+    x = x_ + 8;
+    cursor = offset;
+    clear();
+  }
+
+  void setDelay(int di) {
+    this->di = di;    
+    d1 = (cursor+size-di)&(mask);
+  }
+
+  void clear() {
+    memset(x_,0,(size+16)*sizeof(float));
+  }
+
+  float probe() {
+    float y0;
+    y0 = x[d1];
+    return y0;
+  }
+
+  float goDelay(float in) {
+    float y0;
+    x[cursor] = in;
+    if(cursor <= 3) {
+      x[cursor + size] = in;
+    }
+    cursor = (cursor + 1) & mask;
+    y0 = x[d1];
+    d1 = (d1 + 1) & mask;
+    return y0; 
+  }
+
+  vec4 probe4() {
+    
+    float out[4] __attribute__((aligned(32)));
+    for(int i=2; i<4; i++) {
+      int d = d1 + i - 2;
+      out[i] = x[(d + size) & mask];
+    }
+    d1 = (d1 + 2) & mask;
+
+    return _mm_load_ps(out);
+  }
+
+  void backup() {
+    d1 = (d1 - 1 + size) & mask;
+  }
+
+  void backupCursor() {
+    cursor = (cursor - 1 + size) & mask;
+  }
+
+  vec4 goDelay4(vec4 in) {
+    if(cursor == 0) {
+      _mm_store_ps((x + size), in);
+    }
+    _mm_store_ps((x + cursor), in);
+    vec4 y0 = _mm_loadu_ps(x + d1);
+    d1 = (d1 + 4) & mask;
+    cursor = (cursor + 4) & mask;
+    return y0;
+  }
+
+};
+
+
 class DWGResonator {
  public:
   DWGResonator();
   void create(float omega, float gamma);
   float go(float in);
+  vec4 go4(vec4 vin);
 
   // variables
   float g;
@@ -83,133 +195,38 @@ class DWGResonator {
   float x2;
 };
 
-class ConvolutionResonator {
+class MSD2Filter {
 public:
-  ConvolutionResonator();
-  ~ConvolutionResonator();
+ MSD2Filter() : f11(4), f12(4), f21(4), f22(4) {}
+  void filter(float in[2], float out[2]);
+  void filter4(vec4 in[2], vec4 out[2]);
 
-  void create(float omega, float gamma);
-  float go(float in);
+  void create(float Fs,
+              float m1, float k1, float R1, 
+              float m2, float k2, float R2,
+              float R12, float k12, float Zn, float Z); 
+    
+  float f11,f12,f21,f22;
+};
 
-  float *b;
-  float *x;
-  float *bend;
+enum {
+  ResampleFilterSize = 64
+};
+
+class ResampleFIR {
+ public:
+  ResampleFIR();
+  bool isCreated();
+  int getDelay();
+  void create(int resample);
+  vec8 filter8(vec8 in);
+  float b[ResampleFilterSize]  __attribute__((aligned(32)));
+  float x[ResampleFilterSize*4+16]  __attribute__((aligned(32)));
   float *xc;
   float *xend;
-  int size;
-};
-
-class Thiran : public Filter {
- public:
- Thiran(int n) : Filter(n) {}
-  void create(float D, int N);
-};
-
-class ThiranDispersion : public Thiran {
- public:
- ThiranDispersion() : Thiran(2) {}
-  void create(float B, float f, int M);
-};
-
-
-class Loss_ : public Filter {
- public:
- Loss_(int N) : Filter(N) {}
-  virtual void create(float f0, float fs, float c1, float c3)=0;
-};
-
-
-template<int upsample>
-class Loss : public Loss_ {
-  enum { aFB = 2*upsample+1,
-         xFB = 2*upsample-1
-  };
-
- public:
-  Loss() : Loss_(upsample) {}
-  float filter(float in) {
-    float out = b[0] * in - b[aFB] * x[xFB];
-    for(int i=xFB; i>1; i-=2) {
-      x[i] = x[i-2];
-    }
-    x[1] = out;
-    return out;
-  }
-
-   void create(float f0, float fs, float c1, float c3) {
-     n = 1;  
-     float g = 1.0 - c1/f0; 
-     float c = 4.0*c3+f0;
-     float a1 = (-c+sqrt(c*c-16.0*c3*c3))/(4.0*c3);
-     b[0] = g*(1+a1);
-     b[2] = 0;
-     b[1] = 1;    
-     b[aFB] = a1;     
-     init();
-   }
-};
-
-template <int size>
-class Delay
-{
- public:
-  int di; 
-  int d1;
-  int cursor;
-  int probeOffset;
-
-  float x[size] __attribute__((aligned(32)));
-  bool bFull;
-
-  enum {
-    mask = size-1 };
-
-  Delay() {
-    bFull = false;
-    cursor = 0;
-  }
-
-  void setDelay(int di) {
-    this->di = di;    
-    if(bFull) {
-      d1 = (cursor+size-di)&(mask);
-    } else {
-      d1 = cursor - di;
-    }
-  }
-
-  void clear() {
-    memset(x,0,size*sizeof(float));
-  }
-
-  float probe(int del) {
-    return x[(cursor + size - del)&mask];
-  }
-
-  float goDelay(float in) {
-    float y0;
-    x[cursor] = in;
-    cursor++;
-    if(d1 < 0) {
-      y0 = 0;
-      d1++;
-    } else {
-      y0 = x[d1];
-      d1 = (d1 + 1) & mask;
-    }
-    if(cursor & size) {
-      bFull = true;
-      cursor = 0;
-    }
-    return y0; 
-  }
-};
-
-
-class MSDFilter : public Filter {
-public:
-  MSDFilter() : Filter(2) {}
-  void create(float Fs, float m, float k, float mu, float RT);
+  float *bend;
+  int xsize;
+  bool bInit;
 };
 
 #endif

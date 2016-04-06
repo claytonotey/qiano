@@ -75,8 +75,8 @@ void mexFunction(int nlhs, mxArray *plhs[],
     }
   }
 
-
-  effect->triggerOn(note,velocity,ftune?(ftune+3*(note-1)):NULL);
+  float *ftune2 = ftune+3*(note-1);
+  effect->triggerOn(note,velocity,ftune2);
 
 
   for(int i=0; i<N; i += blockSize) {

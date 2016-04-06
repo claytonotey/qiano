@@ -1,0 +1,3 @@
+pushd src
+/Applications/MATLAB_R2014b.app/bin/mex AudioFFT.o FFTConvolver.o TwoStageFFTConvolver.o Utilities.o dwgs.o utils.o filter.o hammer.o midi.o qiano.o reverb.o vst.o vsteffect.o /src/vst2.4/sdk/audioeffect.o /src/vst2.4/sdk/audioeffectx.o /src/vst2.4/sdk/vstplugmain.o qianomex.cpp -I/src/vst2.4/sdk/ -I/src/vst2.4/plugin
+popd
