@@ -1,11 +1,8 @@
 Content
 =======
 
-libsbsms is a library for high quality time and pitch scale modification.  It uses octave subband sinusoidal modeling.
-
-The API is found in sbsms.h.
-  
-Clayton Otey (otey@users.sourceforge.net)
+A digital waveguide based physical model.
+Includes vst2.4 plugin, command line tool, and matlab mex interface.
 
 Requirements
 ============
